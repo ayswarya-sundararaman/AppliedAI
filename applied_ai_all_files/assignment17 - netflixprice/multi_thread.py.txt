@@ -1,0 +1,250 @@
+# this is just to know how much time will it take to run this entire ipython notebook 
+from datetime import datetime
+# globalstart = datetime.now()
+import pandas as pd
+import numpy as np
+
+import os
+from scipy import sparse
+from scipy.sparse import csr_matrix
+
+from sklearn.decomposition import TruncatedSVD
+from sklearn.metrics.pairwise import cosine_similarity
+import random
+## change the current working directory 
+os.chdir('C:\\Users\\sundararaman\\Documents\\appleidai\\Netflix Price\\')
+def get_average_rating(sparse_matrix,of_user):
+    ax = 1 if of_user else 0
+    sum_ = sparse_matrix.sum(axis=ax).A1
+    is_rated = sparse_matrix!=0
+    total_ratings = is_rated.sum(axis=ax).A1
+    u,v = sparse_matrix.shape
+    avg_rating = {i: sum_[i]/total_ratings[i] for i in range(u if of_user else v) if total_ratings[i]!=0}
+    return avg_rating
+
+def get_random_sparse_matrix(sparse_matrix,no_users,no_movies,verbose,path):
+    row_ind,cols_ind,ratings = sparse.find(sparse_matrix)
+    
+#     prev_user = set(test_reg.user)
+#     current_user = set(row_ind)
+#     prev_movie = set(test_reg.movie)
+#     current_movie = set(cols_ind)
+
+#     users = np.unique(list(current_user - prev_user))
+#     movies = np.unique(list(current_movie - prev_movie))
+    users = np.unique(row_ind)
+    movies = np.unique(cols_ind)
+    
+    ## random subset of users 
+    np.random.seed(15)
+    random_users = np.random.choice(users,no_users,replace=False)
+    random_movies = np.random.choice(movies,no_movies,replace=False)
+    
+    ## masking 
+    mask = np.logical_and(np.isin(row_ind,random_users),np.isin(cols_ind,random_movies))
+    
+    ## creating sample matrix
+    random_sparse_matrix = sparse.csr_matrix((ratings[mask],(row_ind[mask],cols_ind[mask])),
+                                      shape=(max(random_users)+1, max(random_movies)+1))
+    
+    if verbose:
+        print("Sampled Matrix : (users, movies) -- ({} {})".format(len(random_users), len(random_movies)))
+        print("Sampled Matrix : Ratings --", format(ratings[mask].shape[0]))
+
+    print('Saving it into disk for furthur usage..')
+    # save it into disk
+    sparse.save_npz(path, random_sparse_matrix)
+    if verbose:
+            print('Done..\n')
+    return random_sparse_matrix
+
+
+start = datetime.now()
+path = "sample_train_sparse_matrix.npz"
+if os.path.isfile(path):
+    print("It is present in your pwd, getting it from disk....")
+    # just get it from the disk instead of computing it
+    sample_train_sparse_matrix = sparse.load_npz(path)
+    print("DONE..")
+else: 
+    # get 10k users and 1k movies from available data 
+    print('Sampled data not present in pwd,creating the sparse matrix......')
+    sample_train_sparse_matrix = get_random_sparse_matrix(train_sparse_matrix,no_users=25000, no_movies=3000,verbose=True,path=path)
+
+print(datetime.now() - start)
+
+start = datetime.now()
+
+path = "sample_test_sparse_matrix.npz"
+if os.path.isfile(path):
+    print("It is present in your pwd, getting it from disk....")
+    # just get it from the disk instead of computing it
+    sample_test_sparse_matrix = sparse.load_npz(path)
+    print("DONE..")
+else:
+    # get 5k users and 500 movies from available data 
+    sample_test_sparse_matrix = get_random_sparse_matrix(test_sparse_matrix, no_users=5000, no_movies=500,verbose=True,
+                                                 path = path)
+print(datetime.now() - start)
+
+### 4.2 Finding Global Average of all movie ratings, Average rating per User, and Average rating per Movie (from sampled train)
+
+sample_train_averages = dict()
+
+# get the global average of ratings in our train set.
+global_average = sample_train_sparse_matrix.sum()/sample_train_sparse_matrix.count_nonzero()
+sample_train_averages['global'] = global_average
+sample_train_averages
+
+
+sample_train_averages['user'] = get_average_rating(sample_train_sparse_matrix, of_user=True)
+print('\nAverage rating of user 1515220 :',sample_train_averages['user'][1515220])
+
+
+sample_train_averages['movie'] =  get_average_rating(sample_train_sparse_matrix, of_user=False)
+print('\n AVerage rating of movie 15153 :',sample_train_averages['movie'][15153])
+
+
+print('\n No of ratings in Our Sampled train matrix is : {}\n'.format(sample_train_sparse_matrix.count_nonzero()))
+print('\n No of ratings in Our Sampled test  matrix is : {}\n'.format(sample_test_sparse_matrix.count_nonzero()))
+
+
+sample_train_users,sample_train_movies,sample_train_ratings = sparse.find(sample_train_sparse_matrix)
+
+
+folder_1 ='first'
+folder_2 ='second'
+folder_3 ='third'
+folder_4 ='fourth'
+folder_5 ='fifth'
+folder_6 ='sixth'
+
+for i in [folder_1,folder_2,folder_3,folder_4,folder_5,folder_6]:
+    if not os.path.isdir(i):
+        os.makedirs(i)
+
+def parallelprocess(zip_,path):
+    count=0
+    with open(path, mode='w') as reg_data_file:
+        for (user, movie, rating) in zip_:
+            st = datetime.now()
+            # print(user, movie)    
+            #--------------------- Ratings of "movie" by similar users of "user" ---------------------
+            # compute the similar Users of the "user"        
+            user_sim = cosine_similarity(sample_train_sparse_matrix[user], sample_train_sparse_matrix).ravel()
+            top_sim_users = user_sim.argsort()[::-1][1:] 
+
+            # we are ignoring 'The User' from its similar users.
+            # get the ratings of most similar users for this movie
+
+            top_ratings = sample_train_sparse_matrix[top_sim_users, movie].toarray().ravel()
+
+            # we will make it's length "5" by adding movie averages to .
+
+            top_sim_users_ratings = list(top_ratings[top_ratings != 0][:5])
+            top_sim_users_ratings.extend([sample_train_averages['movie'][movie]]*(5 - len(top_sim_users_ratings)))
+            # print(top_sim_users_ratings, end=" ")    
+
+
+            #--------------------- Ratings by "user"  to similar movies of "movie" ---------------------
+            # compute the similar movies of the "movie"     
+
+            movie_sim = cosine_similarity(sample_train_sparse_matrix[:,movie].T, sample_train_sparse_matrix.T).ravel()
+            top_sim_movies = movie_sim.argsort()[::-1][1:] 
+
+            # we are ignoring 'The User' from its similar users.
+            # get the ratings of most similar movie rated by this user..
+
+            top_ratings = sample_train_sparse_matrix[user, top_sim_movies].toarray().ravel()
+            # we will make it's length "5" by adding user averages to.
+            top_sim_movies_ratings = list(top_ratings[top_ratings != 0][:5])
+            top_sim_movies_ratings.extend([sample_train_averages['user'][user]]*(5-len(top_sim_movies_ratings))) 
+            #print(top_sim_movies_ratings, end=" : -- ")
+
+            #-----------------prepare the row to be stores in a file-----------------#
+            row = list()
+            row.append(user)
+            row.append(movie)
+            # Now add the other features to this data...
+            row.append(sample_train_averages['global']) # first feature
+            # next 5 features are similar_users "movie" ratings
+            row.extend(top_sim_users_ratings)
+            # next 5 features are "user" ratings for similar_movies
+            row.extend(top_sim_movies_ratings)
+            # Avg_user rating
+            row.append(sample_train_averages['user'][user])
+            # Avg_movie rating
+            row.append(sample_train_averages['movie'][movie])
+
+            # finalley, The actual Rating of this user-movie pair...
+            row.append(rating)
+            count = count + 1
+
+            # add rows to the file opened..
+            reg_data_file.write(','.join(map(str, row)))
+            reg_data_file.write('\n')        
+            if (count)%10000 == 0:
+                # print(','.join(map(str, row)))
+                print("Done for {} rows----- {}".format(count, datetime.now() - start))
+
+
+def firstprocess():
+     zip_ = zip(sample_train_users[0:142831],sample_train_movies[0:142831],sample_train_ratings[0:142831])
+     parallelprocess(zip_,'first/regtrain.csv')
+                   
+def secondprocess():
+
+     zip_ = zip(sample_train_users[142831:285662],sample_train_movies[142831:285662],sample_train_ratings[142831:285662])
+     parallelprocess(zip_,'second/regtrain.csv')           
+
+def thirdprocess():
+
+     zip_ = zip(sample_train_users[285662:428493],sample_train_movies[285662:428493],sample_train_ratings[285662:428493])
+     parallelprocess(zip_,'third/regtrain.csv')  
+                   
+def fourthprocess():
+
+     zip_ = zip(sample_train_users[428493:571324],sample_train_movies[428493:571324],sample_train_ratings[428493:571324])
+     parallelprocess(zip_,'fourth/regtrain.csv')     
+
+def fifthprocess():
+
+     zip_ = zip(sample_train_users[571324:714155],sample_train_movies[571324:714155],sample_train_ratings[571324:714155])
+     parallelprocess(zip_,'fifth/regtrain.csv')  
+                   
+def sixthprocess():
+
+     zip_ = zip(sample_train_users[714155:856986],sample_train_movies[714155:856986],sample_train_ratings[714155:856986])
+     parallelprocess(zip_,'sixth/regtrain.csv')                                       
+
+from multiprocessing import Process# this is used for multithreading
+import multiprocessing
+def main():
+    #the below code is used for multiprogramming
+    #the number of process depends upon the number of cores present System
+    #process is used to call multiprogramming
+    p1=Process(target=firstprocess)
+    p2=Process(target=secondprocess)
+    p3=Process(target=thirdprocess)
+    p4=Process(target=fourthprocess)
+    p5=Process(target=fifthprocess)
+    p6=Process(target=sixthprocess)
+    #p1.start() is used to start the thread execution
+    p1.start()
+    p2.start()
+    p3.start()
+    p4.start()
+    p5.start()
+    p6.start()
+    #After completion all the threads are joined
+    p1.join()
+    p2.join()
+    p3.join()
+    p4.join()
+    p5.join()
+    p6.join()   
+if __name__=="__main__":
+    main()
+
+import multiprocessing as mp
+print("Number of processors: ", mp.cpu_count())

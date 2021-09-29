@@ -1,0 +1,252 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# ## Self-driving car assignment 
+# 
+#  In the <b>SullyChen's</b> dataset we are given with front-view images of a car while driving.The video of the car was taken for 25 mins and the video is broken into pictures captured at 30 frames/second.We are tasked to predict the angle of the steering wheel.The given problem is a Regression problem, where we use CNN for Regression.We are going to use NVIDIA's cnn architecture to train our models.Given the input images of the front view of the car we need to predict the streering angle  
+# 
+# 
+
+# #### Assignment 
+# 1. hyperparameter tuning using Drop out rate as 0.5
+# 2. Adam optimizer with learning rate 10*e-3
+# 3. Use train-test split as 70:30
+# 4. Use Linear activation instaed of tanh
+
+# In[1]:
+
+
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from scipy import pi
+import cv2
+import math
+import scipy.misc
+import seaborn as sns
+import tensorflow as tf
+import numpy as np
+
+# In[2]:
+
+
+#### laoding data from the dataset
+folder = 'driving_dataset/'
+data_f = os.path.join(folder,'data.txt')
+input_,output_=[],[]
+with open(data_f,'rb') as f :
+     for line in f :
+            line = line.decode('utf-8')
+            image_name,steering_angle  = line.split()
+            image_loc = os.path.join(folder,image_name)
+            input_.append(image_loc)
+            output_.append(float(steering_angle) * (pi / 180)) ## convert to degrees to radians
+
+
+# In[3]:
+
+
+### 
+input_len  = len(input_)
+print('size of the input dataset:',len(input_))
+
+
+# In[4]:
+
+
+print('Sample input datapoint:',input_[0],'ouput:',output_[0])
+print('Sample input datapoint:',input_[67],'ouput:',output_[67])
+print('Sample input datapoint:',input_[25],'ouput:',output_[25])
+
+
+# In[5]:
+
+
+#### train-test temporal split
+x_train,y_train = input_[:int(0.70 * input_len)],output_[:int(0.70 * input_len)]
+x_test,y_test = input_[int(0.70 * input_len):],output_[int(0.70 * input_len):]
+
+
+train_img_len = len(x_train) 
+test_img_len = len(x_test)
+
+train_batch_pointer = 0
+test_batch_pointer = 0
+
+
+
+def load_tr_te_batch(batch_size,batch_type='train'):
+    global train_batch_pointer
+    global test_batch_pointer
+    
+    if batch_type=='train':
+        x_out = []
+        y_out = []
+        for i in range(0, batch_size):
+            ## let's read batch wise data ,here the train_batch_pointer increments once a batch is loaded in our 
+            ## input matrix.%train_img_len here makes sure train_batch_pointer+i do not exceed the number of imgaes in train 
+            ## as we keep adding our batch 
+            img_read = cv2.imread(x_train[(train_batch_pointer + i) % train_img_len])
+            ### after reading the image we just want to capture the lower 150 pixels , as our steering moves 
+            ## based on the anglar turns of the road , we just want to capture that
+            img_read_150 = img_read[-150:]
+            ## our x_train imge is of size (256, 455, 3) after selecting lower  150 , it is of size (150,455,3)
+            ## we resize to 200,66,3 to keep the aspect ratio same (150/455~=66/200) 
+            img_resize = cv2.resize(img_read_150,(200, 66))
+            ### normalizing the pixels
+            x_out.append(img_resize / 255.0)
+            y_out.append([y_train[(train_batch_pointer + i) % train_img_len]])
+        train_batch_pointer += batch_size 
+        return x_out, y_out
+    else:
+        x_out = []
+        y_out = []
+        for i in range(0, batch_size):
+            img_read = cv2.imread(x_test[(test_batch_pointer + i) % test_img_len])
+            img_read_150 = img_read[-150:]
+            img_resize = cv2.resize(img_read_150,(200, 66))
+            ### normalizing the pixels
+            x_out.append(img_resize / 255.0)
+            y_out.append([y_test[(test_batch_pointer + i) % test_img_len]])
+        test_batch_pointer += batch_size 
+        return x_out, y_out
+        
+
+
+def weight_variable(shape):
+    initial = tf.truncated_normal(shape, stddev=0.1)
+    return tf.Variable(initial)
+
+def bias_variable(shape):
+    initial = tf.constant(0.1, shape=shape)
+    return tf.Variable(initial)
+
+def conv2d(x, W, stride):
+    return tf.nn.conv2d(x, W, strides=[1, stride, stride, 1], padding='VALID')
+
+x = tf.placeholder(tf.float32, shape=[None, 66, 200, 3])
+y_ = tf.placeholder(tf.float32, shape=[None, 1])
+
+x_image = x ## shape of x_imgae == (,66*200*3)
+
+#first convolutional layer
+W_conv1 = weight_variable([5, 5, 3, 24])
+b_conv1 = bias_variable([24])
+
+h_conv1 = tf.nn.relu(conv2d(x_image, W_conv1, 2) + b_conv1) ## stride==2,shape(24@31x98)
+
+#second convolutional layer
+W_conv2 = weight_variable([5, 5, 24, 36])
+b_conv2 = bias_variable([36])
+
+h_conv2 = tf.nn.relu(conv2d(h_conv1, W_conv2, 2) + b_conv2) ## stride==2,shape(36@14x47)
+
+#third convolutional layer
+W_conv3 = weight_variable([5, 5, 36, 48])
+b_conv3 = bias_variable([48])
+
+h_conv3 = tf.nn.relu(conv2d(h_conv2, W_conv3, 2) + b_conv3) ## stride==2,shape(48@5x22)
+
+#fourth convolutional layer
+W_conv4 = weight_variable([3, 3, 48, 64])   
+b_conv4 = bias_variable([64])
+
+h_conv4 = tf.nn.relu(conv2d(h_conv3, W_conv4, 1) + b_conv4) ## stride==1,shape(64@3x20)
+
+#fifth convolutional layer
+W_conv5 = weight_variable([3, 3, 64, 64])
+b_conv5 = bias_variable([64])
+
+h_conv5 = tf.nn.relu(conv2d(h_conv4, W_conv5, 1) + b_conv5) ## stride==1,shape(64@1x18)
+
+#FCL 1
+W_fc1 = weight_variable([1152, 1164]) ### 1164 nurons for faltetn layer 1 
+b_fc1 = bias_variable([1164])
+
+h_conv5_flat = tf.reshape(h_conv5, [-1, 1152]) ### our flatten layer is of shape 1*1152 
+h_fc1 = tf.nn.relu(tf.matmul(h_conv5_flat, W_fc1) + b_fc1) ## here we are performing matrix multiplication 
+## between (1*1152) x (1152*1164)
+
+keep_prob = tf.placeholder(tf.float32)
+h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob) ### adding a dropout layer 
+
+#FCL 2
+W_fc2 = weight_variable([1164, 100]) ### 100 nurons for faltetn layer 2 
+b_fc2 = bias_variable([100])
+
+h_fc2 = tf.nn.relu(tf.matmul(h_fc1_drop, W_fc2) + b_fc2)
+
+h_fc2_drop = tf.nn.dropout(h_fc2, keep_prob)  ### adding a dropout layer 
+
+#FCL 3
+W_fc3 = weight_variable([100, 50]) ### 50 nurons for flatten layer 3
+b_fc3 = bias_variable([50])
+
+h_fc3 = tf.nn.relu(tf.matmul(h_fc2_drop, W_fc3) + b_fc3)
+
+h_fc3_drop = tf.nn.dropout(h_fc3, keep_prob)  ### adding a dropout layer 
+
+#final flatten layer 4
+W_fc4 = weight_variable([50, 10]) ### 10 nurons for flatten layer 4
+b_fc4 = bias_variable([10])
+
+h_fc4 = tf.nn.relu(tf.matmul(h_fc3_drop, W_fc4) + b_fc4)
+
+h_fc4_drop = tf.nn.dropout(h_fc4, keep_prob)  ### adding a dropout layer 
+
+#Output
+W_fc5 = weight_variable([10, 1])
+b_fc5 = bias_variable([1])
+
+y = tf.identity(tf.matmul(h_fc4_drop, W_fc5) + b_fc5)  #scale the  output
+
+
+# Let's run our model
+
+## let's restore our model after training 
+
+sess = tf.InteractiveSession()
+saver = tf.train.Saver()
+saver.restore(sess, "save/model.ckpt")
+
+
+## read the steering wheel image 
+steering_image = cv2.imread('steering_wheel_image.jpg',0)
+rows,cols = steering_image.shape
+
+## we want to see the test predicted values 
+
+
+test_idx = math.ceil(input_len*0.8)
+
+print('*'*100)
+print('\n\n\n')
+print('Displaying video frame from '+' datapoint '+ str(int(test_idx)))
+print('\n\n\n')
+print('*'*100)
+
+smoothed_angle=0
+while(cv2.waitKey(50) != ord('q')):
+     full_image = scipy.misc.imread('driving_dataset/'+str(test_idx)+'.jpg',mode='RGB')
+     ## extracting just the below 150 pixels and resizing it into 66,200 and normalizing the image 
+     image_150 =  full_image[-150:]
+     resize_img = scipy.misc.imresize(image_150,(66,200))
+     ## normalize img
+     norm_img = resize_img / 255
+
+     ## evaluate and convert to degrees
+
+     degrees_predicted = y.eval(feed_dict={x: [norm_img], keep_prob: 1.0})[0][0] * 180.0 / scipy.pi
+     degrees_actual = str(output_[test_idx]*180/scipy.pi)
+
+     print("Steering angle: " + str(degrees_predicted) + " (pred)\t" + degrees_actual + " (actual)"
+            + "  absolute error : "+ str(round(abs(float(degrees_actual)-float(degrees_predicted)),2)))
+
+     cv2.imshow("frame", cv2.cvtColor(full_image, cv2.COLOR_RGB2BGR))
+     smoothed_angle += 0.2 * pow(abs((degrees_predicted - smoothed_angle)), 2.0 / 3.0) * (degrees_predicted - smoothed_angle) / abs(degrees_predicted - smoothed_angle)
+     M = cv2.getRotationMatrix2D((cols/2,rows/2),-smoothed_angle,1)
+     dst = cv2.warpAffine(steering_image,M,(cols,rows))
+     cv2.imshow("steering wheel", dst)
+     test_idx += 1
+
